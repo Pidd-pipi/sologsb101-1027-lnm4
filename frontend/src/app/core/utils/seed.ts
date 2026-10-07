@@ -64,9 +64,11 @@ const FERMENTS: Array<Omit<FermentRow, 'revision' | 'createdAt' | 'updatedAt'>> 
 ];
 
 const PACKAGINGS: Array<Omit<PackagingRow, 'revision' | 'createdAt' | 'updatedAt'>> = [
-  { id: 'pk-001', batchNo: 'B-2401', recipeId: 'rc-001', packDate: '2024-04-22', container: '瓶装', quantity: 40, carbonationVol: 2.5, abv: 6.7 },
-  { id: 'pk-002', batchNo: 'B-2402', recipeId: 'rc-002', packDate: '2024-04-24', container: '桶装', quantity: 1, carbonationVol: 2.8, abv: 5.1 },
-  { id: 'pk-003', batchNo: 'B-2403', recipeId: 'rc-003', packDate: '2024-05-02', container: '罐装', quantity: 48, carbonationVol: 2.2, abv: 6.6 }
+  { id: 'pk-001', batchNo: 'B-2401', recipeId: 'rc-001', packDate: '2024-04-22', container: '瓶装', quantity: 40, carbonationVol: 2.5, og: 1.062, fg: 1.011, abv: 6.69 },
+  // 罐装时抄下的 OG / FG 与后来补齐的发酵读数对不上（B-2402 实绩 OG 1.05 / FG 1.016），留给月末对账改写
+  { id: 'pk-002', batchNo: 'B-2402', recipeId: 'rc-002', packDate: '2024-04-24', container: '桶装', quantity: 1, carbonationVol: 2.8, og: 1.048, fg: 1.009, abv: 5.1 },
+  // B-2403 只有一条发酵读数，对账时列入「读数不足」备查，不改写
+  { id: 'pk-003', batchNo: 'B-2403', recipeId: 'rc-003', packDate: '2024-05-02', container: '罐装', quantity: 48, carbonationVol: 2.2, og: 1.068, fg: 1.018, abv: 6.6 }
 ];
 
 /** 灌入演示数据（配方 → 麦芽 / 酒花 / 糖化步 / 煮沸投加 → 发酵读数 → 罐装批次） */

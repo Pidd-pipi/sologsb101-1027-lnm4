@@ -70,7 +70,7 @@ npm run build      # ng build，产物在 frontend/dist/gbbrewhouse/browser
 | `/mash` | 糖化升温步编排与洗糟 | MashStep、Recipe | **Angular CDK 拖拽调序**（含上下移按钮）、逐条签署完成、进度与总水量统计 |
 | `/boil` | 煮沸投花时间表 | BoilAdd、Hop、Recipe | 按投加时点倒计时排序、**高亮下一投加点**、按 α 酸估算 IBU 并与目标 IBU 比对 |
 | `/ferment` | 发酵比重与双乙酰还原 | Ferment、Recipe | 批次切换、逐日录入比重/温度/双乙酰、**趋势条（超温标红）**、双乙酰低于阈值提示还原完成、停滞判定 |
-| `/packaging` | 罐装批次登记与结构版本导出 | Packaging 及全部模型 | 由发酵读数自动带出 OG/FG 与 ABV、配方实绩档案导出、本地库版本查看与整库 JSON 导入导出 |
+| `/packaging` | 罐装批次登记与结构版本导出 | Packaging 及全部模型 | 由发酵读数自动带出 OG/FG 与 ABV、**月末按批次号对账**（以发酵读数为准改写罐装 OG/FG/ABV，对不上的批次单独备查，可退回对账前的数值）、配方实绩档案导出、本地库版本查看与整库 JSON 导入导出（旧备份按当前结构回填，超容量分批写入，失败回滚可重试） |
 
 ---
 
@@ -93,11 +93,11 @@ sologsb101-1027/
         └── app/
             ├── app.component.ts  app.config.ts  app.routes.ts
             ├── core/models/         recipe malt hop mash-step boil-add ferment packaging（+ filter）
-            ├── core/services/       recipe.service.ts gravity-trend.service.ts idb-table.service.ts
+            ├── core/services/       recipe.service.ts gravity-trend.service.ts idb-table.service.ts reconcile.service.ts
             ├── core/state/          recipe/{actions,reducer,selectors,effects}
             │                        ferment/{actions,reducer,selectors,effects}
             │                        ingredients/ mash/ boil/ packaging/（各 actions + reducer + selectors）
-            ├── core/utils/          brew.ts db.ts export.ts seed.ts uuid.ts
+            ├── core/utils/          brew.ts db.ts export.ts reconcile.ts seed.ts uuid.ts
             ├── shared/components/   style-tag/ filter-bar/ stat-badge/ empty-panel/
             └── features/            recipes/ ingredients/ mash/ boil/ ferment/ packaging/
 ```
@@ -106,8 +106,10 @@ sologsb101-1027/
 
 ## 六、数据存储说明
 
-- **IndexedDB 库名**：`gbbrewhouse-db`（Dexie 封装），结构版本号 `version(1)`，并带 `upgrade()` 迁移逻辑（为历史行补齐行修订号与时间戳）。
+- **IndexedDB 库名**：`gbbrewhouse-db`（Dexie 封装），结构版本号 `version(2)`，并带 `upgrade()` 迁移逻辑（v1 为历史行补齐行修订号与时间戳；v2 为罐装批次补 `og` / `fg` 实绩字段，并兜底补齐更早历史库缺失的时间戳）。
 - **分表存储**：`recipes` 配方、`malts` 麦芽、`hops` 酒花、`mashSteps` 糖化步、`boilAdds` 煮沸投加、`ferments` 发酵读数、`packagings` 罐装批次，共 7 张表；每行带 `revision` / `createdAt` / `updatedAt`。
+- **月末批次对账**：`core/services/reconcile.service.ts` 按批次号把罐装批次与发酵读数配对，以发酵读数为准（最早一条为 OG、最晚一条为 FG，ABV 由 OG/FG 重算）改写罐装批次；对账前自动抓快照，写入超容量（单批 500 行）自动分批，中途失败自动回滚并可重试，页面上也可一键「退回对账前的数值」；无读数 / 读数不足 / 未罐装的批次不改写，单独列入备查清单。
+- **备份导入**：旧备份（`schemaVersion` 低于当前）先由 `core/utils/reconcile.ts` 按当前结构回填（罐装行缺 `og` / `fg` 时优先用同批次发酵读数派生），再经 `importSnapshotChunked()` 分批写入；任一批失败用导入前快照整体回滚，修正后可安全重试。
 - **首屏自动播种**：`core/utils/db.ts` 的 `initDatabase()` 在 `recipes` 表为空时调用 `seedDatabase()`，灌入互相引用的三层演示数据（配方 → 麦芽/酒花/糖化步/煮沸投加 → 发酵读数 → 罐装批次），保证 6 个页面首次打开都有内容；播种幂等。
 - **状态流**：页面只 `dispatch` NgRx actions 并 `select` 状态流，所有读写最终由 `core/services/recipe.service.ts` → `IdbTableService` → Dexie 落库，跨页状态不留在组件字段。
 - **无后端**：没有 API 服务、没有数据库容器；容器本身无状态，不挂载任何卷。

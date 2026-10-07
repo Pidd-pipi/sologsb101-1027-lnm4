@@ -32,7 +32,7 @@ import {
   DB_NAME,
   DB_SCHEMA_VERSION,
   exportSnapshot,
-  importSnapshot,
+  importSnapshotChunked,
   initDatabase,
   resetDatabase,
   type DatabaseSnapshot,
@@ -45,6 +45,8 @@ import {
   serializeArchive,
   type RecipeArchive
 } from '../../core/utils/export';
+import { backfillSnapshot } from '../../core/utils/reconcile';
+import { ReconcileService, type ReconcileReport } from '../../core/services/reconcile.service';
 import { abvFromGravity } from '../../core/utils/brew';
 
 @Component({
@@ -130,7 +132,7 @@ import { abvFromGravity } from '../../core/utils/brew';
                     <td>{{ row.quantity }}</td>
                     <td>{{ row.carbonationVol }}</td>
                     <td>{{ row.abv }} %vol</td>
-                    <td>{{ realizedOg(row.recipeId) }} / {{ realizedFg(row.recipeId) }}</td>
+                    <td>{{ row.og }} / {{ row.fg }}</td>
                     <td>
                       <button mat-button type="button" (click)="edit(row)">编辑</button>
                       <button mat-button color="warn" type="button" (click)="remove(row)">删除</button>
@@ -181,21 +183,110 @@ import { abvFromGravity } from '../../core/utils/brew';
                 <input matInput type="number" step="0.1" [(ngModel)]="form.carbonationVol" />
               </mat-form-field>
               <mat-form-field appearance="outline">
+                <mat-label>实绩 OG（对账回写）</mat-label>
+                <input matInput type="number" step="0.001" [(ngModel)]="form.og" />
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>实绩 FG（对账回写）</mat-label>
+                <input matInput type="number" step="0.001" [(ngModel)]="form.fg" />
+              </mat-form-field>
+              <mat-form-field appearance="outline">
                 <mat-label>最终酒精度 %vol（由读数带出）</mat-label>
                 <input matInput type="number" step="0.1" [(ngModel)]="form.abv" />
               </mat-form-field>
             </div>
-            <p class="muted">提示：选择批次号后会自动按该批次发酵读数回算 ABV（当前建议值 {{ suggestedAbv() }} %vol）。</p>
+            <p class="muted">提示：选择批次号后会自动按该批次发酵读数回算 OG / FG / ABV（当前建议值 {{ suggestedAbv() }} %vol）。</p>
           </mat-card-content>
           <mat-card-actions align="end">
             <button mat-button type="button" (click)="formVisible = false">取消</button>
-            <button mat-button type="button" (click)="fillAbv()">按读数回算 ABV</button>
+            <button mat-button type="button" (click)="fillAbv()">按读数回算 OG / FG / ABV</button>
             <button mat-flat-button color="primary" type="button" (click)="submit()">保存</button>
           </mat-card-actions>
         </mat-card>
       }
 
       <div class="grid-cards">
+        <mat-card appearance="outlined">
+          <mat-card-header><mat-card-title>月末批次对账</mat-card-title></mat-card-header>
+          <mat-card-content>
+            <p class="muted">
+              按批次号把罐装记录与发酵读数配对，以发酵读数为准改写罐装批次的 OG / FG / ABV；
+              对不上的批次不改写，单独列出备查。写入超容量自动分批，失败可重试并退回对账前的数值。
+            </p>
+            <div class="archive-actions">
+              <button mat-flat-button color="primary" type="button" (click)="runReconcile()" [disabled]="reconciling">
+                {{ reconciling ? '对账中…' : '按批次号对账' }}
+              </button>
+              <button mat-stroked-button color="warn" type="button" (click)="rollbackReconcile()" [disabled]="!canRollback">
+                退回对账前的数值
+              </button>
+            </div>
+            @if (report) {
+              <div class="badge-row">
+                <app-stat-badge label="已改写批次" [value]="report.changed" suffix="个" tone="primary" icon="sync_alt" />
+                <app-stat-badge label="写入批次" [value]="report.batches" suffix="批" tone="info" icon="view_list" />
+                <app-stat-badge
+                  label="对不上备查"
+                  [value]="unmatchedTotal()"
+                  suffix="个"
+                  tone="danger"
+                  icon="report"
+                />
+              </div>
+              @if (report.plan.changes.length > 0) {
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>批次号</th>
+                      <th>对账前 OG / FG / ABV</th>
+                      <th>对账后 OG / FG / ABV</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (change of report.plan.changes; track change.id) {
+                      <tr>
+                        <td>{{ change.batchNo }}</td>
+                        <td>{{ change.before.og }} / {{ change.before.fg }} / {{ change.before.abv }} %vol</td>
+                        <td>{{ change.after.og }} / {{ change.after.fg }} / {{ change.after.abv }} %vol</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              }
+              @if (unmatchedTotal() > 0) {
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>备查批次号</th>
+                      <th>原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (pack of report.plan.unmatched.missingReadings; track pack.id) {
+                      <tr>
+                        <td>{{ pack.batchNo }}</td>
+                        <td>罐装已登记，发酵侧没有任何读数</td>
+                      </tr>
+                    }
+                    @for (pack of report.plan.unmatched.insufficientReadings; track pack.id) {
+                      <tr>
+                        <td>{{ pack.batchNo }}</td>
+                        <td>发酵读数不足两条，无法定 OG / FG</td>
+                      </tr>
+                    }
+                    @for (batchNo of report.plan.unmatched.unpackagedBatchNos; track batchNo) {
+                      <tr>
+                        <td>{{ batchNo }}</td>
+                        <td>发酵有读数，罐装侧未登记</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              }
+            }
+          </mat-card-content>
+        </mat-card>
+
         <mat-card appearance="outlined">
           <mat-card-header><mat-card-title>配方实绩档案导出</mat-card-title></mat-card-header>
           <mat-card-content>
@@ -254,7 +345,9 @@ import { abvFromGravity } from '../../core/utils/brew';
                 [(ngModel)]="importText"
                 placeholder="粘贴导出的 JSON 备份内容后点击确认导入"
               ></textarea>
-              <button mat-flat-button color="primary" type="button" (click)="doImport()">确认导入（覆盖现有数据）</button>
+              <button mat-flat-button color="primary" type="button" (click)="doImport()">
+                确认导入（旧数据按当前结构回填，超容量分批写入）
+              </button>
             }
           </mat-card-content>
         </mat-card>
@@ -295,6 +388,7 @@ export class PackagingListComponent implements OnInit {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly snack = inject(MatSnackBar);
+  private readonly reconcileService = inject(ReconcileService);
 
   readonly dbName = DB_NAME;
   readonly schemaVersion = DB_SCHEMA_VERSION;
@@ -325,6 +419,12 @@ export class PackagingListComponent implements OnInit {
   formVisible = false;
   editingId: string | null = null;
   form: Omit<Packaging, 'id'> = createEmptyPackaging();
+
+  /** 最近一次对账报告（含对不上的备查清单） */
+  report: ReconcileReport | null = null;
+  reconciling = false;
+  /** 是否有可退回的对账前数值 */
+  canRollback = false;
 
   readonly totalQuantity = computed(() => this.filtered().reduce((sum, item) => sum + item.quantity, 0));
   readonly avgAbv = computed(() => {
@@ -370,12 +470,10 @@ export class PackagingListComponent implements OnInit {
     return { og: rows[0].gravity, fg: rows[rows.length - 1].gravity };
   }
 
-  realizedOg(recipeId: string): number {
-    return this.realized(recipeId).og;
-  }
-
-  realizedFg(recipeId: string): number {
-    return this.realized(recipeId).fg;
+  private readingsForForm() {
+    return this.ferments()
+      .filter((item) => item.batchNo === this.form.batchNo || (this.form.batchNo.length === 0 && item.recipeId === this.form.recipeId))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 
   private abvForBatch(batchNo: string, recipeId: string): number {
@@ -389,9 +487,15 @@ export class PackagingListComponent implements OnInit {
     return abvFromGravity(rows[0].gravity, rows[rows.length - 1].gravity);
   }
 
+  /** 按当前表单批次号的发酵读数回算 OG / FG / ABV 并填入表单 */
   fillAbv(): void {
+    const rows = this.readingsForForm();
+    if (rows.length >= 2) {
+      this.form.og = rows[0].gravity;
+      this.form.fg = rows[rows.length - 1].gravity;
+    }
     this.form.abv = this.suggestedAbv();
-    this.snack.open('已按发酵读数回算 ABV', '关闭', { duration: 1800 });
+    this.snack.open('已按发酵读数回算 OG / FG / ABV', '关闭', { duration: 1800 });
   }
 
   openCreate(): void {
@@ -400,6 +504,11 @@ export class PackagingListComponent implements OnInit {
     this.form.recipeId = this.selectedRecipeId() ?? this.recipes()[0]?.id ?? '';
     this.form.batchNo = this.ferments()[0]?.batchNo ?? '';
     this.form.abv = this.abvForBatch(this.form.batchNo, this.form.recipeId);
+    const rows = this.readingsForForm();
+    if (rows.length >= 2) {
+      this.form.og = rows[0].gravity;
+      this.form.fg = rows[rows.length - 1].gravity;
+    }
     this.formVisible = true;
   }
 
@@ -412,6 +521,8 @@ export class PackagingListComponent implements OnInit {
       container: row.container,
       quantity: row.quantity,
       carbonationVol: row.carbonationVol,
+      og: row.og,
+      fg: row.fg,
       abv: row.abv
     };
     this.formVisible = true;
@@ -436,6 +547,51 @@ export class PackagingListComponent implements OnInit {
     if (!window.confirm(`删除罐装批次「${row.batchNo}」？`)) return;
     this.store.dispatch(PackagingActions.deletePackaging({ id: row.id }));
     void this.refreshCounts();
+  }
+
+  /** 对不上的批次总数（备查清单行数） */
+  unmatchedTotal(): number {
+    if (!this.report) return 0;
+    const { missingReadings, insufficientReadings, unpackagedBatchNos } = this.report.plan.unmatched;
+    return missingReadings.length + insufficientReadings.length + unpackagedBatchNos.length;
+  }
+
+  /** 月末对账：以发酵读数为准改写罐装批次的 OG / FG / ABV，对不上的批次列入备查 */
+  async runReconcile(): Promise<void> {
+    if (this.reconciling) return;
+    this.reconciling = true;
+    try {
+      this.report = await this.reconcileService.reconcile();
+      this.canRollback = this.reconcileService.canRollback;
+      this.store.dispatch(FermentActions.loadFerments());
+      await this.refreshCounts();
+      const total = this.unmatchedTotal();
+      const message =
+        this.report.changed === 0
+          ? total > 0
+            ? `没有需要改写的批次，${total} 个批次对不上已列入备查`
+            : '全部罐装批次已与发酵读数一致'
+          : `对账完成：改写 ${this.report.changed} 个批次${total > 0 ? `，${total} 个批次对不上已列入备查` : ''}`;
+      this.snack.open(message, '关闭', { duration: 3000 });
+    } catch (error) {
+      this.snack.open(error instanceof Error ? error.message : '对账失败，可重试', '关闭', { duration: 3500 });
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  /** 退回对账前的数值 */
+  async rollbackReconcile(): Promise<void> {
+    const restored = await this.reconcileService.rollback();
+    this.canRollback = this.reconcileService.canRollback;
+    if (restored === 0) {
+      this.snack.open('没有可退回的对账记录', '关闭', { duration: 2000 });
+      return;
+    }
+    this.report = null;
+    this.store.dispatch(FermentActions.loadFerments());
+    await this.refreshCounts();
+    this.snack.open('已退回对账前的数值', '关闭', { duration: 2500 });
   }
 
   onArchiveRecipeChange(recipeId: string): void {
@@ -477,15 +633,19 @@ export class PackagingListComponent implements OnInit {
       if (!Array.isArray((snapshot as unknown as { recipes?: unknown[] }).recipes)) {
         throw new Error('缺少 recipes 数组字段，不是本应用的备份文件');
       }
-      await importSnapshot(snapshot);
+      // 旧备份里的旧数据先按当前结构回填（补 og / fg 等缺省字段），再分批写入；
+      // 中途失败由 importSnapshotChunked 自动回滚到导入前数据，可修正后重试。
+      const backfilled = backfillSnapshot(snapshot);
+      const result = await importSnapshotChunked(backfilled);
       await this.refreshCounts();
       this.store.dispatch(RecipeActions.reloadAll());
       this.store.dispatch(FermentActions.loadFerments());
       this.importVisible = false;
       this.importText = '';
-      this.snack.open('备份已导入', '关闭', { duration: 2500 });
+      const chunkedTip = result.batches > 1 ? `，超容量已分 ${result.batches} 批写入` : '';
+      this.snack.open(`备份已导入（${result.rows} 行${chunkedTip}）`, '关闭', { duration: 3000 });
     } catch (error) {
-      this.snack.open(`导入失败：${error instanceof Error ? error.message : '未知错误'}`, '关闭', { duration: 3000 });
+      this.snack.open(`导入失败：${error instanceof Error ? error.message : '未知错误'}`, '关闭', { duration: 3500 });
     }
   }
 

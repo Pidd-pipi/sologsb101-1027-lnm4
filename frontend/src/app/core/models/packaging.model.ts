@@ -16,6 +16,10 @@ export interface Packaging {
   quantity: number;
   /** 二氧化碳体积 */
   carbonationVol: number;
+  /** 实绩初始比重 OG（以同批次号发酵读数为准，月末对账回写） */
+  og: number;
+  /** 实绩终点比重 FG（以同批次号发酵读数为准，月末对账回写） */
+  fg: number;
   /** 最终酒精度 %vol */
   abv: number;
 }
@@ -30,6 +34,8 @@ export function createEmptyPackaging(): Omit<Packaging, 'id'> {
     container: '瓶装',
     quantity: 24,
     carbonationVol: 2.4,
+    og: 0,
+    fg: 0,
     abv: 5.2
   };
 }
