@@ -70,7 +70,7 @@ npm run build      # ng build，产物在 frontend/dist/gbbrewhouse/browser
 | `/mash` | 糖化升温步编排与洗糟 | MashStep、Recipe | **Angular CDK 拖拽调序**（含上下移按钮）、逐条签署完成、进度与总水量统计 |
 | `/boil` | 煮沸投花时间表 | BoilAdd、Hop、Recipe | 按投加时点倒计时排序、**高亮下一投加点**、按 α 酸估算 IBU 并与目标 IBU 比对 |
 | `/ferment` | 发酵比重与双乙酰还原 | Ferment、Recipe | 批次切换、逐日录入比重/温度/双乙酰、**趋势条（超温标红）**、双乙酰低于阈值提示还原完成、停滞判定 |
-| `/packaging` | 罐装批次登记与结构版本导出 | Packaging 及全部模型 | 由发酵读数自动带出 OG/FG 与 ABV、配方实绩档案导出、本地库版本查看与整库 JSON 导入导出 |
+| `/packaging` | 罐装批次登记与结构版本导出 | Packaging 及全部模型 | 登记罐装 OG/FG/ABV、**月底按批次号对账（以发酵读数为准改写，对不上的批次单列备查并可导出 CSV，事务分批写入、失败可重试、一键退回对账前数值）**、配方实绩档案导出、本地库版本查看与整库 JSON 导入导出 |
 
 ---
 
@@ -106,8 +106,9 @@ sologsb101-1027/
 
 ## 六、数据存储说明
 
-- **IndexedDB 库名**：`gbbrewhouse-db`（Dexie 封装），结构版本号 `version(1)`，并带 `upgrade()` 迁移逻辑（为历史行补齐行修订号与时间戳）。
-- **分表存储**：`recipes` 配方、`malts` 麦芽、`hops` 酒花、`mashSteps` 糖化步、`boilAdds` 煮沸投加、`ferments` 发酵读数、`packagings` 罐装批次，共 7 张表；每行带 `revision` / `createdAt` / `updatedAt`。
+- **IndexedDB 库名**：`gbbrewhouse-db`（Dexie 封装），当前结构版本号 `version(2)`；v1→v2 升级时罐装表并入 `og` / `fg` 两个实绩字段，旧行按批次号取发酵首尾读数回填（读数不足退回配方目标值），导入旧备份时也走同一套回填逻辑。
+- **分表存储**：`recipes` 配方、`malts` 麦芽、`hops` 酒花、`mashSteps` 糖化步、`boilAdds` 煮沸投加、`ferments` 发酵读数、`packagings` 罐装批次（含 `og` / `fg` / `abv`），共 7 张表；每行带 `revision` / `createdAt` / `updatedAt`。
+- **月底对账**：罐装页「按批次号对账」把糖化（发酵读数）与罐装两套记录按 `batchNo` 合并——以发酵首读为 OG、末读为 FG、`(OG−FG)×131.25` 为 ABV 改写罐装行；缺读数、读数不足（<2 条）或抄值不一致的批次只列入备查清单、可导出 CSV，不做暗改。改写在单个 Dexie 事务内**分批写入**（每批 500 行，超容量自动拆批），任何一批失败整体回滚、库内仍是对账前数值，可直接重试；改写前自动留底，支持一键**退回对账前的数值**。对账纯逻辑见 `core/utils/reconcile.ts`。
 - **首屏自动播种**：`core/utils/db.ts` 的 `initDatabase()` 在 `recipes` 表为空时调用 `seedDatabase()`，灌入互相引用的三层演示数据（配方 → 麦芽/酒花/糖化步/煮沸投加 → 发酵读数 → 罐装批次），保证 6 个页面首次打开都有内容；播种幂等。
 - **状态流**：页面只 `dispatch` NgRx actions 并 `select` 状态流，所有读写最终由 `core/services/recipe.service.ts` → `IdbTableService` → Dexie 落库，跨页状态不留在组件字段。
 - **无后端**：没有 API 服务、没有数据库容器；容器本身无状态，不挂载任何卷。

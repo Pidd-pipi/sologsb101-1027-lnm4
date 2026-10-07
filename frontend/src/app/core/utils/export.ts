@@ -64,8 +64,22 @@ export async function buildRecipeArchive(recipeId: string): Promise<RecipeArchiv
     db.packagings.where('recipeId').equals(recipeId).toArray()
   ]);
   const sortedFerments = [...ferments].sort((a, b) => a.date.localeCompare(b.date));
-  const og = sortedFerments.length > 0 ? sortedFerments[0].gravity : recipe.targetOg;
-  const fg = sortedFerments.length > 0 ? sortedFerments[sortedFerments.length - 1].gravity : recipe.targetFg;
+  // 月度对账后罐装行自带以发酵读数为准的 og / fg：档案优先用罐装实绩口径，
+  // 没有罐装行时才退回发酵首尾读数，保证导出的档案能看出「该信哪份」。
+  const sortedPackagings = [...packagings].sort((a, b) => a.packDate.localeCompare(b.packDate));
+  const latestPackaging = sortedPackagings[sortedPackagings.length - 1];
+  const og =
+    latestPackaging && typeof latestPackaging.og === 'number' && latestPackaging.og > 0
+      ? latestPackaging.og
+      : sortedFerments.length > 0
+        ? sortedFerments[0].gravity
+        : recipe.targetOg;
+  const fg =
+    latestPackaging && typeof latestPackaging.fg === 'number' && latestPackaging.fg > 0
+      ? latestPackaging.fg
+      : sortedFerments.length > 0
+        ? sortedFerments[sortedFerments.length - 1].gravity
+        : recipe.targetFg;
 
   return {
     name: DB_NAME,

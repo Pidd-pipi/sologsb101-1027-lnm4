@@ -14,6 +14,7 @@ import { ingredientsReducer } from './core/state/ingredients/ingredients.reducer
 import { mashReducer } from './core/state/mash/mash.reducer';
 import { boilReducer } from './core/state/boil/boil.reducer';
 import { packagingReducer } from './core/state/packaging/packaging.reducer';
+import { PackagingEffects } from './core/state/packaging/packaging.effects';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -28,7 +29,7 @@ export const appConfig: ApplicationConfig = {
       boil: boilReducer,
       packaging: packagingReducer
     }),
-    provideEffects([RecipeEffects, FermentEffects]),
+    provideEffects([RecipeEffects, FermentEffects, PackagingEffects]),
     provideStoreDevtools({ maxAge: 25, logOnly: !isDevMode() })
   ]
 };

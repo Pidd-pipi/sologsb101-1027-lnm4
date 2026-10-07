@@ -6,6 +6,15 @@ export const selectPackagingState = createFeatureSelector<PackagingState>('packa
 
 export const selectAllPackagings = createSelector(selectPackagingState, (state) => state.packagings);
 export const selectPackagingFilter = createSelector(selectPackagingState, (state) => state.filter);
+export const selectReconcilePlan = createSelector(selectPackagingState, (state) => state.reconcilePlan);
+export const selectReconcileBusy = createSelector(selectPackagingState, (state) => state.reconcileBusy);
+export const selectReconcileError = createSelector(selectPackagingState, (state) => state.reconcileError);
+export const selectReconcileBackups = createSelector(selectPackagingState, (state) => state.reconcileBackups);
+export const selectLastAppliedCount = createSelector(selectPackagingState, (state) => state.lastAppliedCount);
+export const selectLastAppliedAt = createSelector(selectPackagingState, (state) => state.lastAppliedAt);
+export const selectLastRestoredCount = createSelector(selectPackagingState, (state) => state.lastRestoredCount);
+export const selectLastRestoredAt = createSelector(selectPackagingState, (state) => state.lastRestoredAt);
+export const selectReconcileErrorAt = createSelector(selectPackagingState, (state) => state.reconcileErrorAt);
 
 export const selectFilteredPackagings = createSelector(
   selectAllPackagings,
